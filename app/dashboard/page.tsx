@@ -1,23 +1,72 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAccount } from "wagmi";
 import Link from "next/link";
+import { getTracksByOwner, fetchTrackMetadata, shortenAddress, getTrackIds } from "@/lib/queries";
+import type { TrackData, TrackMetadata } from "@/lib/queries";
+import { createPublicClient, http } from "viem";
+import { aeneid } from "@story-protocol/core-sdk";
 
-const MOCK_TRACKS = [
-  { ipId: "0x0000000000000000000000000000000000000001", title: "My Track 1", artist: "Me", licenses: 3, revenue: "0.05 IP" },
-  { ipId: "0x0000000000000000000000000000000000000002", title: "My Track 2", artist: "Me", licenses: 1, revenue: "0.01 IP" },
-];
-
-const MOCK_LICENSES = [
-  { tokenId: 1, track: "Track Name", artist: "Artist", price: "0.01 IP" },
-];
+const publicClient = createPublicClient({
+  chain: aeneid,
+  transport: http(process.env.NEXT_PUBLIC_RPC_URL ?? "https://aeneid.storyrpc.io"),
+});
 
 type Tab = "tracks" | "licenses";
 
 export default function DashboardPage() {
   const { address, isConnected } = useAccount();
   const [tab, setTab] = useState<Tab>("tracks");
+  const [tracks, setTracks] = useState<(TrackData & { meta?: TrackMetadata })[]>([]);
+  const [licenseCount, setLicenseCount] = useState<number>(0);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!address) return;
+    setLoading(true);
+
+    Promise.all([
+      getTracksByOwner(address).then(async (data) => {
+        const withMeta = await Promise.all(
+          data.map(async (t) => ({ ...t, meta: (await fetchTrackMetadata(t.metadataURI)) ?? undefined })),
+        );
+        return withMeta;
+      }),
+      getLicenseCount(address),
+    ])
+      .then(([t, count]) => {
+        setTracks(t);
+        setLicenseCount(count);
+      })
+      .catch(console.error)
+      .finally(() => setLoading(false));
+  }, [address]);
+
+  async function getLicenseCount(owner: `0x${string}`): Promise<number> {
+    try {
+      const ids = await getTrackIds(0, 100);
+      let count = 0;
+      for (const tokenId of ids) {
+        try {
+          const bal = await publicClient.readContract({
+            address: "0xFe3838BFb30B34170F00030B52eA4893d8aAC6bC" as `0x${string}`,
+            abi: [
+              { type: "function", name: "balanceOf", inputs: [{ type: "address" }, { type: "uint256" }], outputs: [{ type: "uint256" }], stateMutability: "view" },
+            ],
+            functionName: "balanceOf",
+            args: [owner, tokenId],
+          });
+          count += Number(bal);
+        } catch {
+          continue;
+        }
+      }
+      return count;
+    } catch {
+      return 0;
+    }
+  }
 
   if (!isConnected) {
     return (
@@ -35,7 +84,7 @@ export default function DashboardPage() {
         <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
         <p className="mt-2 text-muted">
           <code className="rounded bg-card px-2 py-0.5 text-xs font-mono text-accent">
-            {address?.slice(0, 6)}...{address?.slice(-4)}
+            {shortenAddress(address!)}
           </code>
         </p>
       </div>
@@ -49,14 +98,18 @@ export default function DashboardPage() {
               tab === t ? "bg-accent text-white" : "text-muted hover:text-foreground"
             }`}
           >
-            {t === "tracks" ? "My Tracks" : "My Licenses"}
+            {t === "tracks" ? `My Tracks (${tracks.length})` : `My Licenses (${licenseCount})`}
           </button>
         ))}
       </div>
 
-      {tab === "tracks" ? (
+      {loading ? (
+        <div className="flex items-center justify-center py-12">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+        </div>
+      ) : tab === "tracks" ? (
         <div className="space-y-3">
-          {MOCK_TRACKS.length === 0 ? (
+          {tracks.length === 0 ? (
             <div className="glass-card rounded-2xl p-12 text-center">
               <p className="text-muted">You haven&apos;t uploaded any tracks yet.</p>
               <Link href="/upload" className="mt-4 inline-flex h-10 items-center rounded-xl bg-accent px-5 text-sm font-semibold text-white hover:bg-accent-hover">
@@ -64,27 +117,31 @@ export default function DashboardPage() {
               </Link>
             </div>
           ) : (
-            MOCK_TRACKS.map((track) => (
-              <Link
-                key={track.ipId}
-                href={`/track/${track.ipId}`}
-                className="glass-card flex items-center justify-between rounded-2xl p-4 transition-all hover:translate-x-1"
-              >
-                <div>
-                  <h3 className="font-semibold">{track.title}</h3>
-                  <p className="text-sm text-muted">{track.artist}</p>
-                </div>
-                <div className="text-right text-sm">
-                  <p className="text-muted">{track.licenses} licenses</p>
-                  <p className="font-medium text-accent">{track.revenue}</p>
-                </div>
-              </Link>
-            ))
+            tracks.map((track) => {
+              const title = track.meta?.title ?? `Track #${track.tokenId.toString()}`;
+              const artist = track.meta?.artist ?? shortenAddress(track.owner);
+              return (
+                <Link
+                  key={track.tokenId.toString()}
+                  href={`/track/${track.ipId}`}
+                  className="glass-card flex items-center justify-between rounded-2xl p-4 transition-all hover:translate-x-1"
+                >
+                  <div>
+                    <h3 className="font-semibold">{title}</h3>
+                    <p className="text-sm text-muted">{artist}</p>
+                  </div>
+                  <div className="text-right text-sm">
+                    <p className="text-muted">{track.vaultLinked ? "Vault linked" : "No vault"}</p>
+                    <p className="text-xs text-muted">Token #{track.tokenId.toString()}</p>
+                  </div>
+                </Link>
+              );
+            })
           )}
         </div>
       ) : (
         <div className="space-y-3">
-          {MOCK_LICENSES.length === 0 ? (
+          {licenseCount === 0 ? (
             <div className="glass-card rounded-2xl p-12 text-center">
               <p className="text-muted">You haven&apos;t minted any licenses yet.</p>
               <Link href="/browse" className="mt-4 inline-flex h-10 items-center rounded-xl bg-accent px-5 text-sm font-semibold text-white hover:bg-accent-hover">
@@ -92,18 +149,10 @@ export default function DashboardPage() {
               </Link>
             </div>
           ) : (
-            MOCK_LICENSES.map((lic) => (
-              <div key={lic.tokenId} className="glass-card flex items-center justify-between rounded-2xl p-4">
-                <div>
-                  <h3 className="font-semibold">{lic.track}</h3>
-                  <p className="text-sm text-muted">{lic.artist}</p>
-                </div>
-                <div className="text-right text-sm">
-                  <p className="font-medium text-accent">{lic.price}</p>
-                  <p className="text-xs text-muted">Token #{lic.tokenId}</p>
-                </div>
-              </div>
-            ))
+            <div className="glass-card rounded-2xl p-8 text-center">
+              <p className="text-3xl font-bold text-accent">{licenseCount}</p>
+              <p className="mt-1 text-sm text-muted">License token{licenseCount !== 1 ? "s" : ""} minted</p>
+            </div>
           )}
         </div>
       )}
