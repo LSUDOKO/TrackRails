@@ -1,0 +1,26 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["node_modules", "lib"]
+cache_path = "forge-cache"
+gas_reports = ["*"]
+optimizer = true
+optimizer_runs = 20000
+test = "test"
+solc = "0.8.26"
+fs_permissions = [
+    { access = "read", path = "./out" },
+    { access = "read-write", path = "./deploy-out" },
+]
+evm_version = "cancun"
+
+remappings = [
+    "@openzeppelin/=node_modules/@openzeppelin/",
+    "@storyprotocol/core/=lib/protocol-core-v1/contracts/",
+    "@storyprotocol/periphery/=lib/protocol-periphery-v1/contracts/",
+    "erc6551/=node_modules/erc6551/",
+    "forge-std/=lib/forge-std/src/",
+    "ds-test/=lib/forge-std/lib/ds-test/src/",
+    "@storyprotocol/test/=lib/protocol-core-v1/test/foundry/",
+    "@solady/=node_modules/solady/",
+]
