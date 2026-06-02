@@ -26,4 +26,7 @@ export const env = {
   get TRACK_RAILS_PROTOCOL() {
     return process.env.NEXT_PUBLIC_TRACK_RAILS_PROTOCOL ?? "";
   },
+  get TRACK_NFT() {
+    return process.env.NEXT_PUBLIC_TRACK_NFT ?? "";
+  },
 } as const;

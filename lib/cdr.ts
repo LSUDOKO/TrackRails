@@ -1,6 +1,7 @@
 import {
   CDRClient,
   encryptFile,
+  decryptFile,
   uuidToLabel,
 } from "@piplabs/cdr-sdk";
 import type { TDH2Ciphertext } from "@piplabs/cdr-sdk";
@@ -454,4 +455,51 @@ export async function downloadCDRFile(
     accessAuxData,
     timeoutMs,
   });
+}
+
+// ---------------------------------------------------------------------------
+// AES helpers (thin wrappers around CDR crypto)
+// ---------------------------------------------------------------------------
+
+export interface AesEncryptResult {
+  ciphertext: Uint8Array;
+  key: Uint8Array;
+}
+
+/**
+ * AES-256-GCM encrypt raw content.
+ * Returns `{ ciphertext, key }` where `key` is the 32-byte AES key.
+ */
+export function aesEncrypt(plaintext: Uint8Array): AesEncryptResult {
+  return encryptFile(plaintext);
+}
+
+/**
+ * AES-256-GCM decrypt content.
+ * Expects `ciphertext` in CDR format: IV (12 bytes) || encrypted || GCM tag (16 bytes).
+ */
+export function aesDecrypt(params: {
+  ciphertext: Uint8Array;
+  key: Uint8Array;
+}): Uint8Array {
+  return decryptFile(params);
+}
+
+// ---------------------------------------------------------------------------
+// accessAuxData builder
+// ---------------------------------------------------------------------------
+
+/**
+ * Encode license token IDs into `accessAuxData` for CDR read conditions.
+ *
+ * This is what the `LicenseReadCondition` contract expects:
+ * ```
+ * abi.decode(accessAuxData, (uint256[]))
+ * ```
+ */
+export function buildAccessAuxData(licenseTokenIds: bigint[]): `0x${string}` {
+  return encodeAbiParameters(
+    [{ type: "uint256[]" }],
+    [licenseTokenIds],
+  );
 }

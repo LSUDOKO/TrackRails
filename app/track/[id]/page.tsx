@@ -1,13 +1,14 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useParams, notFound } from "next/navigation";
+import { useState, useEffect, useRef } from "react";
+import { useParams } from "next/navigation";
 import { useAccount } from "wagmi";
+import { useCDRClient } from "@/hooks/use-cdr";
 import { useStoryClient } from "@/hooks/use-story";
 import { getTokenIdForIp, getTrack, fetchTrackMetadata, formatTimestamp } from "@/lib/queries";
 import type { TrackData, TrackMetadata } from "@/lib/queries";
 import { mintLicenseToken } from "@/lib/story";
-import { CDR_CONTRACTS } from "@/lib/cdr";
+import { CDR_CONTRACTS, aesDecrypt, buildAccessAuxData } from "@/lib/cdr";
 import { createPublicClient, http } from "viem";
 import { aeneid } from "@story-protocol/core-sdk";
 
@@ -23,19 +24,26 @@ const publicClient = createPublicClient({
   transport: http(process.env.NEXT_PUBLIC_RPC_URL ?? "https://aeneid.storyrpc.io"),
 });
 
+interface EnrichedMetadata extends TrackMetadata {
+  encryptedAudioCID?: string;
+}
+
 export default function TrackDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { address, isConnected } = useAccount();
   const { client: storyClient } = useStoryClient();
+  const { client: cdrClient } = useCDRClient();
 
+  const audioRef = useRef<HTMLAudioElement>(null);
   const [track, setTrack] = useState<TrackData | null>(null);
-  const [meta, setMeta] = useState<TrackMetadata | null>(null);
+  const [meta, setMeta] = useState<EnrichedMetadata | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [hasLicense, setHasLicense] = useState(false);
   const [minting, setMinting] = useState(false);
-  const [minted, setMinted] = useState<bigint[] | null>(null);
+  const [mintedTokenIds, setMintedTokenIds] = useState<bigint[] | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [decrypting, setDecrypting] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -46,6 +54,13 @@ export default function TrackDetailPage() {
     if (!address || !track) return;
     checkLicense(address, track.ipId, track.licenseTermsId);
   }, [address, track]);
+
+  useEffect(() => {
+    if (!isPlaying) {
+      audioRef.current?.pause();
+      audioRef.current = null;
+    }
+  }, [isPlaying]);
 
   async function loadTrack(ipId: `0x${string}`) {
     setLoading(true);
@@ -60,7 +75,7 @@ export default function TrackDetailPage() {
       const data = await getTrack(tokenId);
       setTrack(data);
       const metadata = await fetchTrackMetadata(data.metadataURI);
-      setMeta(metadata);
+      setMeta(metadata as EnrichedMetadata | null);
     } catch (err) {
       setError("Track not found");
     } finally {
@@ -98,11 +113,67 @@ export default function TrackDetailPage() {
         licenseTermsId: track.licenseTermsId,
         amount: 1,
       });
-      setMinted(result.licenseTokenIds);
+      setMintedTokenIds(result.licenseTokenIds);
+      setHasLicense(true);
     } catch (err) {
       console.error("Mint failed:", err);
     } finally {
       setMinting(false);
+    }
+  }
+
+  async function handlePlay() {
+    if (!track || !address || !meta?.encryptedAudioCID) return;
+    if (audioRef.current) {
+      setIsPlaying(false);
+      return;
+    }
+
+    setDecrypting(true);
+    try {
+      const tokenIds = mintedTokenIds ?? [];
+      if (tokenIds.length === 0) {
+        throw new Error("No license token ID available. Mint a license first.");
+      }
+
+      // 1. Access CDR vault to get AES key
+      const { dataKey: aesKey } = await cdrClient.consumer.accessCDR({
+        uuid: track.vaultUuid,
+        accessAuxData: buildAccessAuxData(tokenIds),
+      });
+
+      // 2. Download encrypted audio from IPFS
+      const res = await fetch(`https://gateway.pinata.cloud/ipfs/${meta.encryptedAudioCID}`);
+      if (!res.ok) throw new Error("Failed to download encrypted audio");
+      const encryptedAudio = new Uint8Array(await res.arrayBuffer());
+
+      // 3. AES-decrypt
+      const decrypted = aesDecrypt({ ciphertext: encryptedAudio, key: aesKey });
+
+      // 4. Create blob URL and play
+      const blob = new Blob([decrypted.buffer as ArrayBuffer], { type: "audio/mpeg" });
+      const url = URL.createObjectURL(blob);
+
+      const audio = new Audio(url);
+      audio.onended = () => {
+        setIsPlaying(false);
+        URL.revokeObjectURL(url);
+        audioRef.current = null;
+      };
+      audio.onerror = () => {
+        setIsPlaying(false);
+        URL.revokeObjectURL(url);
+        audioRef.current = null;
+      };
+
+      audioRef.current = audio;
+      await audio.play();
+      setIsPlaying(true);
+    } catch (err) {
+      console.error("Decryption/playback failed:", err);
+      setError(err instanceof Error ? err.message : "Playback failed");
+    } finally {
+      setDecrypting(false);
     }
   }
 
@@ -130,6 +201,8 @@ export default function TrackDetailPage() {
   const title = meta?.title ?? `Track #${track.tokenId.toString()}`;
   const artist = meta?.artist ?? shortenAddress(track.owner);
   const gradientIndex = Number(track.tokenId % BigInt(6)) % GRADIENTS.length;
+  const canPlay = hasLicense && track.vaultLinked;
+  const hasTokenIds = mintedTokenIds !== null && mintedTokenIds.length > 0;
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-12 sm:px-6 lg:px-8">
@@ -145,11 +218,14 @@ export default function TrackDetailPage() {
 
           <div className="mt-4 glass-card rounded-2xl">
             <button
-              onClick={() => setIsPlaying(!isPlaying)}
-              className="flex w-full items-center gap-3 p-4 transition-colors hover:text-accent"
+              onClick={handlePlay}
+              disabled={!canPlay || !hasTokenIds || decrypting}
+              className="flex w-full items-center gap-3 p-4 transition-colors hover:text-accent disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <div className="flex h-12 w-12 items-center justify-center rounded-full bg-accent text-white">
-                {isPlaying ? (
+                {decrypting ? (
+                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                ) : isPlaying ? (
                   <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25v13.5m-7.5-13.5v13.5" />
                   </svg>
@@ -160,17 +236,27 @@ export default function TrackDetailPage() {
                 )}
               </div>
               <div className="text-left">
-                <p className="font-semibold">{isPlaying ? "Pause" : "Play Preview"}</p>
-                <p className="text-xs text-muted">{meta?.duration ? `${meta.duration}s` : "—"}</p>
+                <p className="font-semibold">
+                  {decrypting ? "Decrypting…" : isPlaying ? "Pause" : canPlay ? "Play Decrypted" : "License Required"}
+                </p>
+                <p className="text-xs text-muted">
+                  {!track.vaultLinked
+                    ? "No CDR vault linked"
+                    : !hasLicense
+                      ? "Mint a license to play"
+                      : !hasTokenIds
+                        ? "Token ID needed for decryption"
+                        : "CDR-decrypted playback"}
+                </p>
               </div>
             </button>
 
             {isPlaying && (
               <div className="border-t border-border/50 px-4 pb-4 pt-3">
                 <div className="h-2 rounded-full bg-border overflow-hidden">
-                  <div className="h-full w-1/3 rounded-full bg-accent animate-pulse" />
+                  <div className="h-full w-full rounded-full bg-accent animate-[progress_3s_ease-in-out_infinite]" />
                 </div>
-                <div className="mt-2 text-xs text-muted text-right">Live preview</div>
+                <div className="mt-2 text-xs text-muted text-right">Decrypting & playing via CDR</div>
               </div>
             )}
           </div>
@@ -226,9 +312,20 @@ export default function TrackDetailPage() {
               </div>
             )}
 
-            {minted ? (
-              <div className="mt-4 rounded-xl bg-emerald-500/10 p-4 text-sm text-emerald-400">
-                License minted! Token ID: {minted[0].toString()}
+            {mintedTokenIds ? (
+              <div className="mt-4 space-y-2">
+                <div className="rounded-xl bg-emerald-500/10 p-4 text-sm text-emerald-400">
+                  License minted! Token ID: {mintedTokenIds[0].toString()}
+                </div>
+                {canPlay && hasTokenIds && (
+                  <button
+                    onClick={handlePlay}
+                    disabled={decrypting}
+                    className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-accent px-8 text-sm font-semibold text-white transition-all hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed glow-accent-sm"
+                  >
+                    {decrypting ? "Decrypting…" : "Play Audio Now"}
+                  </button>
+                )}
               </div>
             ) : (
               <button
@@ -239,7 +336,7 @@ export default function TrackDetailPage() {
                 {minting ? (
                   <>
                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                    Minting...
+                    Minting…
                   </>
                 ) : (
                   <>
@@ -252,7 +349,7 @@ export default function TrackDetailPage() {
               </button>
             )}
 
-            {!isConnected && !minted && (
+            {!isConnected && !mintedTokenIds && (
               <p className="mt-2 text-xs text-muted">Connect your wallet to mint a license.</p>
             )}
           </div>

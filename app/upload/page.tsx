@@ -2,12 +2,12 @@
 
 import { useState, useCallback } from "react";
 import { useCDRClient } from "@/hooks/use-cdr";
-import { useStoryClient } from "@/hooks/use-story";
-import { uploadCDRFile } from "@/lib/cdr";
-import { registerTrack } from "@/lib/story";
+import { useWalletClient, useAccount } from "wagmi";
+import { encryptFile } from "@piplabs/cdr-sdk";
+import { createCDRVault } from "@/lib/cdr";
+import { registerTrackOnProtocol, linkVaultOnProtocol } from "@/lib/contract";
 import { useDropzone } from "react-dropzone";
 import { useRouter } from "next/navigation";
-import { useAccount } from "wagmi";
 
 interface UploadForm {
   title: string;
@@ -16,11 +16,32 @@ interface UploadForm {
   revShare: number;
 }
 
+type UploadStep =
+  | "form"
+  | "encrypting"
+  | "uploading_ipfs"
+  | "registering"
+  | "creating_vault"
+  | "linking"
+  | "done"
+  | "error";
+
+const STEP_LABELS: Record<UploadStep, string> = {
+  form: "",
+  encrypting: "Encrypting audio…",
+  uploading_ipfs: "Uploading to IPFS…",
+  registering: "Registering IP Asset on Story…",
+  creating_vault: "Creating license-gated CDR vault…",
+  linking: "Linking vault to IP Asset…",
+  done: "Complete!",
+  error: "Error",
+};
+
 export default function UploadPage() {
   const router = useRouter();
-  const { isConnected } = useAccount();
+  const { isConnected, address } = useAccount();
+  const { data: walletClient } = useWalletClient();
   const { client: cdrClient } = useCDRClient();
-  const { client: storyClient, address } = useStoryClient();
 
   const [form, setForm] = useState<UploadForm>({
     title: "",
@@ -29,13 +50,16 @@ export default function UploadPage() {
     revShare: 10,
   });
   const [file, setFile] = useState<File | null>(null);
-  const [step, setStep] = useState<"form" | "uploading" | "registering" | "done" | "error">("form");
+  const [step, setStep] = useState<UploadStep>("form");
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
   const [result, setResult] = useState<{
-    ipId: string;
     tokenId: string;
+    ipId: string;
     uuid: number;
-    txHash: string;
+    vaultTxHash: string;
+    registerTxHash: string;
+    linkTxHash: string;
   } | null>(null);
 
   const onDrop = useCallback((accepted: File[]) => {
@@ -49,61 +73,85 @@ export default function UploadPage() {
     onDrop,
     accept: { "audio/*": [".mp3", ".wav", ".flac", ".ogg", ".aac", ".m4a"] },
     maxFiles: 1,
-    maxSize: 50 * 1024 * 1024, // 50 MB
+    maxSize: 50 * 1024 * 1024,
   });
+
+  async function uploadToIPFS(data: Uint8Array): Promise<string> {
+    const blob = new Blob([data.buffer as ArrayBuffer]);
+    const res = await fetch("/api/ipfs/upload", {
+      method: "POST",
+      body: blob,
+    });
+    if (!res.ok) throw new Error("IPFS upload failed");
+    const { cid } = await res.json();
+    return cid as string;
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!file || !storyClient || !address) return;
+    if (!file || !walletClient || !address) return;
 
     try {
-      setStep("uploading");
       setError("");
 
+      // ── Step 1: AES-encrypt ──────────────────────────────────────────
+      setStep("encrypting");
       const content = new Uint8Array(await file.arrayBuffer());
+      const { ciphertext: encryptedAudio, key: aesKey } = encryptFile(content);
 
-      const storageProvider = {
-        upload: async (data: Uint8Array) => {
-          const blob = new Blob([data as BlobPart]);
-          const res = await fetch("/api/ipfs/upload", {
-            method: "POST",
-            body: blob,
-          });
-          if (!res.ok) throw new Error("IPFS upload failed");
-          const { cid } = await res.json();
-          return cid as string;
-        },
-        download: async (_cid: string) => {
-          throw new Error("download not implemented");
-        },
-      };
+      // ── Step 2: Upload encrypted audio to IPFS ────────────────────────
+      setStep("uploading_ipfs");
+      setProgress(30);
+      const encryptedCID = await uploadToIPFS(encryptedAudio);
 
-      const cdrResult = await uploadCDRFile(cdrClient, {
-        content,
-        storageProvider,
-        owner: address,
-        updatable: false,
-      });
-
-      setStep("registering");
-
-      const trackMeta = {
+      // Build + upload metadata JSON
+      const metadata = {
         title: form.title,
         artist: form.artist,
         genre: form.genre || undefined,
+        encryptedAudioCID: encryptedCID,
       };
+      const metadataBytes = new TextEncoder().encode(JSON.stringify(metadata));
+      const metadataCID = await uploadToIPFS(metadataBytes);
+      const metadataURI = `ipfs://${metadataCID}`;
 
-      const ipResult = await registerTrack(storyClient, {
-        track: trackMeta,
-        recipient: address,
+      // ── Step 3: Register track on protocol ────────────────────────────
+      setStep("registering");
+      setProgress(50);
+      const reg = await registerTrackOnProtocol(walletClient, {
+        receiver: address,
+        revShare: form.revShare,
+        metadataURI,
+      });
+
+      // ── Step 4: Create license-gated CDR vault (stores AES key) ───────
+      setStep("creating_vault");
+      setProgress(70);
+      const vault = await createCDRVault(cdrClient, {
+        dataKey: aesKey,
+        owner: address,
+        ipId: reg.ipId,
+        gated: true,
+        updatable: false,
+      });
+
+      // ── Step 5: Link vault to IPA ─────────────────────────────────────
+      setStep("linking");
+      setProgress(90);
+      await linkVaultOnProtocol(walletClient, {
+        tokenId: reg.tokenId,
+        vaultUuid: vault.uuid,
       });
 
       setStep("done");
+      setProgress(100);
       setResult({
-        ipId: ipResult.ipId,
-        tokenId: (ipResult.tokenId ?? BigInt(0)).toString(),
-        uuid: cdrResult.uuid,
-        txHash: ipResult.txHash,
+        tokenId: reg.tokenId.toString(),
+        ipId: reg.ipId,
+        uuid: vault.uuid,
+        vaultTxHash: vault.txHashes.allocate,
+        registerTxHash: reg.txHash,
+        linkTxHash: "",
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
@@ -116,8 +164,8 @@ export default function UploadPage() {
       <div className="mb-10">
         <h1 className="text-3xl font-bold tracking-tight">Upload Track</h1>
         <p className="mt-2 text-muted">
-          Upload an audio file, register it as an IP Asset on Story Protocol,
-          and license it via CDR threshold encryption.
+          Encrypt your audio, register it as an IP Asset on Story Protocol,
+          and gate access behind CDR threshold encryption + license tokens.
         </p>
       </div>
 
@@ -139,23 +187,27 @@ export default function UploadPage() {
             </div>
             <div>
               <h2 className="text-lg font-semibold">Track Registered!</h2>
-              <p className="text-sm text-muted">Your track is now an IP Asset on Story Protocol.</p>
+              <p className="text-sm text-muted">
+                AES-encrypted audio stored in a license-gated CDR vault.
+              </p>
             </div>
           </div>
+
           <div className="space-y-2 rounded-xl bg-background p-4 text-sm">
-            <div className="flex justify-between">
-              <span className="text-muted">IP Asset ID</span>
-              <code className="font-mono text-xs text-accent">{result.ipId.slice(0, 18)}...</code>
-            </div>
             <div className="flex justify-between">
               <span className="text-muted">Token ID</span>
               <span>{result.tokenId}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted">IP Asset ID</span>
+              <code className="font-mono text-xs text-accent">{result.ipId.slice(0, 18)}...</code>
             </div>
             <div className="flex justify-between">
               <span className="text-muted">CDR Vault UUID</span>
               <span>{result.uuid}</span>
             </div>
           </div>
+
           <div className="mt-6 flex gap-3">
             <button
               onClick={() => router.push(`/track/${result.ipId}`)}
@@ -176,13 +228,33 @@ export default function UploadPage() {
             </button>
           </div>
         </div>
-      ) : step === "uploading" || step === "registering" ? (
+      ) : step === "error" ? (
+        <div className="glass-card rounded-2xl p-8 text-center">
+          <div className="mb-3 flex items-center justify-center gap-2 text-red-400">
+            <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+            </svg>
+            <span className="font-semibold">Upload Failed</span>
+          </div>
+          <p className="text-sm text-muted">{error}</p>
+          <button
+            onClick={() => setStep("form")}
+            className="mt-4 rounded-xl bg-accent px-6 py-2.5 text-sm font-semibold text-white hover:bg-accent-hover"
+          >
+            Try Again
+          </button>
+        </div>
+      ) : step !== "form" ? (
         <div className="glass-card rounded-2xl p-12 text-center">
           <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-2 border-accent border-t-transparent" />
-          <p className="font-semibold">
-            {step === "uploading" ? "Encrypting & uploading to IPFS..." : "Registering IP Asset on Story..."}
-          </p>
-          <p className="mt-1 text-sm text-muted">Please confirm the transactions in your wallet.</p>
+          <p className="font-semibold">{STEP_LABELS[step]}</p>
+          <div className="mx-auto mt-4 h-2 max-w-xs rounded-full bg-border">
+            <div
+              className="h-full rounded-full bg-accent transition-all duration-500"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+          <p className="mt-3 text-sm text-muted">Please confirm the transactions in your wallet.</p>
         </div>
       ) : (
         <form onSubmit={handleSubmit} className="space-y-8">
