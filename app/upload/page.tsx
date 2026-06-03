@@ -60,7 +60,7 @@ function formatDuration(seconds: number): string {
  * Returns the IPFS CID (content identifier).
  */
 async function uploadToIPFS(data: Uint8Array): Promise<string> {
-  const blob = new Blob([data], { type: "audio/mpeg" });
+  const blob = new Blob([(data.buffer as ArrayBuffer).slice(data.byteOffset, data.byteOffset + data.byteLength)], { type: "audio/mpeg" });
   const filename = `track-${Date.now()}.mp3`;
   const sizeMB = (blob.size / 1024 / 1024).toFixed(1);
 
