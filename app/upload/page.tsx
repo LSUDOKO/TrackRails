@@ -14,6 +14,9 @@ import { useRouter } from "next/navigation";
 
 const CONTRACTS_READY = isContractConfigured("NEXT_PUBLIC_TRACK_RAILS_PROTOCOL");
 
+const PINATA_GATEWAY = "https://gateway.pinata.cloud/ipfs";
+const PINATA_API = "https://api.pinata.cloud/pinning/pinFileToIPFS";
+
 interface UploadForm {
   title: string;
   artist: string;
@@ -43,6 +46,86 @@ function formatDuration(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
   return `${m}m ${s.toString().padStart(2, "0")}s`;
+}
+
+/**
+ * Upload raw bytes to IPFS via Pinata.
+ *
+ * Strategy:
+ *   1. Direct Pinata upload from the browser (no server-imposed body limit;
+ *      only requires NEXT_PUBLIC_PINATA_JWT to be set in .env.local).
+ *   2. Server proxy fallback (only works for files under ~4.5 MB on Vercel
+ *      Hobby).
+ *
+ * Returns the IPFS CID (content identifier).
+ */
+async function uploadToIPFS(data: Uint8Array): Promise<string> {
+  const blob = new Blob([data], { type: "audio/mpeg" });
+  const filename = `track-${Date.now()}.mp3`;
+  const sizeMB = (blob.size / 1024 / 1024).toFixed(1);
+
+  // ── Strategy 1: Direct Pinata upload ───────────────────────────────
+  let pinataJwt: string | undefined = process.env.NEXT_PUBLIC_PINATA_JWT;
+  if (!pinataJwt) {
+    try {
+      const r = await fetch("/api/ipfs/jwt");
+      if (r.ok) {
+        const j = (await r.json()) as { jwt?: string };
+        pinataJwt = j.jwt;
+      }
+    } catch {
+      // fall through to proxy
+    }
+  }
+
+  if (pinataJwt) {
+    const fd = new FormData();
+    fd.append("file", blob, filename);
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await fetch(PINATA_API, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${pinataJwt}` },
+          body: fd,
+        });
+        if (!res.ok) {
+          const err = await res.text().catch(() => "unknown");
+          throw new Error(`Pinata rejected upload: ${err.slice(0, 200)}`);
+        }
+        const data_ = (await res.json()) as { IpfsHash: string };
+        return data_.IpfsHash;
+      } catch (e) {
+        if (attempt === 1) throw e;
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
+  }
+
+  // ── Strategy 2: Server proxy (Vercel Hobby limit ~4.5 MB) ──────────
+  if (blob.size < 4.5 * 1024 * 1024) {
+    const fd = new FormData();
+    fd.append("file", blob, filename);
+    const proxyRes = await fetch("/api/ipfs/upload", { method: "POST", body: fd });
+    if (proxyRes.ok) {
+      const d = (await proxyRes.json()) as { cid: string };
+      return d.cid;
+    }
+
+    const errBody = await proxyRes.json().catch(() => ({}));
+    const serverError = (errBody as { error?: string }).error;
+    if (serverError) {
+      throw new Error(`Server upload failed: ${serverError}`);
+    }
+  }
+
+  // ── All upload methods exhausted ───────────────────────────────────
+  const msg =
+    blob.size >= 4.5 * 1024 * 1024
+      ? `File is ${sizeMB} MB — too large for the Vercel proxy limit (4.5 MB). ` +
+        `Set NEXT_PUBLIC_PINATA_JWT in your .env.local to enable direct Pinata uploads.`
+      : `Upload failed. Please check that PINATA_JWT is set in your .env.local and try again.`;
+  throw new Error(msg);
 }
 
 export default function UploadPage() {
@@ -114,63 +197,6 @@ export default function UploadPage() {
     maxSize: 5 * 1024 * 1024,
   });
 
-  async function uploadToIPFS(data: Uint8Array): Promise<string> {
-    const blob = new Blob([data.buffer as ArrayBuffer], { type: "audio/mpeg" });
-    const filename = `track-${Date.now()}.mp3`;
-
-    // Strategy 1: proxy through our server (reliable, no CORS / HTTP2 issues).
-    // Works for files under ~4.5 MB on Vercel Hobby.
-    const fd = new FormData();
-    fd.append("file", blob, filename);
-    const proxyRes = await fetch("/api/ipfs/upload", { method: "POST", body: fd });
-    if (proxyRes.ok) {
-      const d = await proxyRes.json();
-      return (d as { cid: string }).cid;
-    }
-
-    // 413 = file too large for server proxy → try direct Pinata upload.
-    let pinataJwt: string | undefined = process.env.NEXT_PUBLIC_PINATA_JWT;
-    if (!pinataJwt) {
-      try {
-        const r = await fetch("/api/ipfs/jwt");
-        if (r.ok) {
-          const j = await r.json();
-          pinataJwt = j.jwt;
-        }
-      } catch { /* fall through */ }
-    }
-
-    if (pinataJwt) {
-      const fd2 = new FormData();
-      fd2.append("file", blob, filename);
-      for (let attempt = 0; attempt < 2; attempt++) {
-        try {
-          const res = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
-            method: "POST",
-            headers: { Authorization: `Bearer ${pinataJwt}` },
-            body: fd2,
-          });
-          if (!res.ok) {
-            const err = await res.text().catch(() => "unknown");
-            throw new Error(`IPFS upload failed: ${err.slice(0, 200)}`);
-          }
-          const data_ = await res.json();
-          return data_.IpfsHash as string;
-        } catch (e) {
-          if (attempt === 1) throw e;
-          await new Promise((r) => setTimeout(r, 1000));
-        }
-      }
-    }
-
-    const errBody = await proxyRes.json().catch(() => ({}));
-    throw new Error(
-      (errBody as { error?: string }).error
-        ? `Server upload failed: ${(errBody as { error?: string }).error}`
-        : `Upload failed (${proxyRes.status}). Try a smaller file (under 4.5 MB) or set NEXT_PUBLIC_PINATA_JWT for direct upload.`,
-    );
-  }
-
   async function handleSubmit(e?: React.FormEvent) {
     e?.preventDefault();
     if (!audioFile || !walletClient || !address) return;
@@ -207,11 +233,12 @@ export default function UploadPage() {
         artist: form.artist,
         genre: form.genre || undefined,
         encryptedAudioCID: encryptedCID,
-        ...(artworkCID ? { artworkUri: `ipfs://${artworkCID}` } : {}),
+        // Use gateway URL instead of ipfs:// protocol to avoid browser errors
+        ...(artworkCID ? { artworkUri: `${PINATA_GATEWAY}/${artworkCID}` } : {}),
       };
       const metadataBytes = new TextEncoder().encode(JSON.stringify(metadata));
       const metadataCID = await uploadToIPFS(metadataBytes);
-      const metadataURI = `ipfs://${metadataCID}`;
+      const metadataURI = `${PINATA_GATEWAY}/${metadataCID}`;
 
       setStep("registering");
       setProgress(45);
@@ -259,7 +286,7 @@ export default function UploadPage() {
           title: form.title,
           artist: form.artist,
           genre: form.genre || undefined,
-          ...(artworkCID ? { artworkUri: `ipfs://${artworkCID}` } : {}),
+          ...(artworkCID ? { artworkUri: `${PINATA_GATEWAY}/${artworkCID}` } : {}),
         },
         txHashes: {
           register: reg.txHash,
@@ -381,7 +408,7 @@ export default function UploadPage() {
             </svg>
           </div>
           <h3 className="text-lg font-semibold text-red-400">Upload Failed</h3>
-          <p className="mt-2 text-sm text-muted max-w-md mx-auto">{error}</p>
+          <p className="mt-2 text-sm text-muted max-w-md mx-auto whitespace-pre-wrap break-words">{error}</p>
           <button onClick={() => setStep("form")} className="mt-6 inline-flex h-11 items-center gap-2 rounded-xl bg-accent px-6 text-sm font-semibold text-white hover:bg-accent-hover">
             Try Again
           </button>
@@ -556,7 +583,7 @@ export default function UploadPage() {
             </div>
 
             {error && (
-              <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">{error}</div>
+              <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400 whitespace-pre-wrap break-words">{error}</div>
             )}
 
             {/* ── Submit ───────────────────────────────────────────────── */}

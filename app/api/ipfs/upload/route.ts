@@ -2,8 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(req: NextRequest) {
   try {
-    const blob = await req.blob();
-    if (blob.size > 50 * 1024 * 1024) {
+    // Parse the multipart form data to extract the actual file
+    const form = await req.formData();
+    const fileField = form.get("file");
+
+    if (!fileField || !(fileField instanceof File)) {
+      return NextResponse.json(
+        { error: "No file uploaded — expected a FormData field named 'file'" },
+        { status: 400 },
+      );
+    }
+
+    if (fileField.size > 50 * 1024 * 1024) {
       return NextResponse.json({ error: "File too large — max 50 MB" }, { status: 400 });
     }
 
@@ -16,9 +26,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const filename = `track-${Date.now()}.mp3`;
+    const filename = fileField.name || `track-${Date.now()}.mp3`;
     const formData = new FormData();
-    formData.append("file", blob, filename);
+    formData.append("file", fileField, filename);
 
     const res = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
       method: "POST",
