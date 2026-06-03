@@ -116,26 +116,56 @@ export default function UploadPage() {
 
   async function uploadToIPFS(data: Uint8Array): Promise<string> {
     const blob = new Blob([data.buffer as ArrayBuffer], { type: "audio/mpeg" });
-    let pinataJwt = process.env.NEXT_PUBLIC_PINATA_JWT;
+
+    // Strategy 1: direct browser upload to Pinata (works for any size, but may
+    // hit CORS / HTTP/2 issues on some networks).
+    let pinataJwt: string | undefined = process.env.NEXT_PUBLIC_PINATA_JWT;
     if (!pinataJwt) {
-      const r = await fetch("/api/ipfs/jwt");
-      if (!r.ok) throw new Error("Pinata JWT not available");
-      const j = await r.json();
-      pinataJwt = j.jwt;
+      try {
+        const r = await fetch("/api/ipfs/jwt");
+        if (r.ok) {
+          const j = await r.json();
+          pinataJwt = j.jwt;
+        }
+      } catch { /* fall through */ }
     }
-    const formData = new FormData();
-    formData.append("file", blob, `track-${Date.now()}.mp3`);
-    const res = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
+
+    if (pinataJwt) {
+      const formData = new FormData();
+      formData.append("file", blob, `track-${Date.now()}.mp3`);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const res = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${pinataJwt}` },
+            body: formData,
+          });
+          if (!res.ok) {
+            const err = await res.text().catch(() => "unknown");
+            throw new Error(`IPFS upload failed: ${err.slice(0, 200)}`);
+          }
+          const data_ = await res.json();
+          return data_.IpfsHash as string;
+        } catch (e) {
+          if (attempt === 1) throw e;
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+      }
+    }
+
+    // Strategy 2: proxy through our server (works for files < 4.5 MB).
+    const formData2 = new FormData();
+    formData2.append("file", blob, `track-${Date.now()}.mp3`);
+    const proxyRes = await fetch("/api/ipfs/upload", {
       method: "POST",
-      headers: { Authorization: `Bearer ${pinataJwt}` },
-      body: formData,
+      body: formData2,
     });
-    if (!res.ok) {
-      const err = await res.text().catch(() => "unknown");
-      throw new Error(`IPFS upload failed: ${err.slice(0, 200)}`);
+    if (!proxyRes.ok) {
+      const err = await proxyRes.json().catch(() => ({}));
+      throw new Error((err as { error?: string }).error ?? `Upload failed (${proxyRes.status})`);
     }
-    const data_ = await res.json();
-    return data_.IpfsHash as string;
+    const proxyData = await proxyRes.json();
+    return (proxyData as { cid: string }).cid;
   }
 
   async function handleSubmit(e?: React.FormEvent) {
