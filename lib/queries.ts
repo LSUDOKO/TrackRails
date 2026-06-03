@@ -1,14 +1,29 @@
 import { createPublicClient, http } from "viem";
 import { aeneid } from "@story-protocol/core-sdk";
-import { env } from "./env";
+import { env, isContractConfigured } from "./env";
 
 const client = createPublicClient({
   chain: aeneid,
   transport: http(env.RPC_URL),
 });
 
-const TRACK_RAILS_PROTOCOL = process.env.NEXT_PUBLIC_TRACK_RAILS_PROTOCOL as `0x${string}`;
-const TRACK_NFT_ADDRESS = process.env.NEXT_PUBLIC_TRACK_NFT as `0x${string}`;
+const TRACK_RAILS_PROTOCOL = process.env.NEXT_PUBLIC_TRACK_RAILS_PROTOCOL as `0x${string}` | undefined;
+const TRACK_NFT_ADDRESS = process.env.NEXT_PUBLIC_TRACK_NFT as `0x${string}` | undefined;
+
+const CONTRACTS_DEPLOYED = isContractConfigured("NEXT_PUBLIC_TRACK_RAILS_PROTOCOL");
+
+/** Clear error message shown when browsing before contracts are deployed. */
+export const CONTRACTS_NOT_DEPLOYED_ERROR =
+  "Track Rails contracts are not deployed yet. " +
+  "Run `forge script script/DeployTrackRails.s.sol --broadcast` first, " +
+  "then set NEXT_PUBLIC_TRACK_RAILS_PROTOCOL and NEXT_PUBLIC_TRACK_NFT in .env.local.";
+
+function requireProtocol(): `0x${string}` {
+  if (!TRACK_RAILS_PROTOCOL) {
+    throw new Error(CONTRACTS_NOT_DEPLOYED_ERROR);
+  }
+  return TRACK_RAILS_PROTOCOL;
+}
 
 const NFT_ABI = [
   { type: "function", name: "tokenURI", inputs: [{ type: "uint256", name: "tokenId" }], outputs: [{ type: "string" }], stateMutability: "view" },
@@ -63,8 +78,9 @@ function parseTokenId(tokenId: string | bigint): bigint {
 
 export async function getTrack(tokenId: string | bigint): Promise<TrackData> {
   const tid = parseTokenId(tokenId);
+  const protocol = requireProtocol();
   const result = (await client.readContract({
-    address: TRACK_RAILS_PROTOCOL,
+    address: protocol,
     abi: PROTOCOL_ABI,
     functionName: "getTrack",
     args: [tid],
@@ -82,16 +98,18 @@ export async function getTrack(tokenId: string | bigint): Promise<TrackData> {
 }
 
 export async function getTrackCount(): Promise<bigint> {
+  const protocol = requireProtocol();
   return client.readContract({
-    address: TRACK_RAILS_PROTOCOL,
+    address: protocol,
     abi: PROTOCOL_ABI,
     functionName: "getTrackCount",
   });
 }
 
 export async function getTrackIds(offset = 0, limit = 50): Promise<readonly bigint[]> {
+  const protocol = requireProtocol();
   const ids: readonly bigint[] = await client.readContract({
-    address: TRACK_RAILS_PROTOCOL,
+    address: protocol,
     abi: PROTOCOL_ABI,
     functionName: "getTrackIds",
     args: [BigInt(offset), BigInt(limit)],
@@ -105,8 +123,9 @@ export async function getAllTracks(offset = 0, limit = 50): Promise<TrackData[]>
 }
 
 export async function getTracksByOwner(owner: `0x${string}`): Promise<TrackData[]> {
+  const protocol = requireProtocol();
   const ids: readonly bigint[] = await client.readContract({
-    address: TRACK_RAILS_PROTOCOL,
+    address: protocol,
     abi: PROTOCOL_ABI,
     functionName: "getTracksByOwner",
     args: [owner],
@@ -115,8 +134,9 @@ export async function getTracksByOwner(owner: `0x${string}`): Promise<TrackData[
 }
 
 export async function getTokenIdForIp(ipId: `0x${string}`): Promise<bigint> {
+  const protocol = requireProtocol();
   return client.readContract({
-    address: TRACK_RAILS_PROTOCOL,
+    address: protocol,
     abi: PROTOCOL_ABI,
     functionName: "getTokenIdForIp",
     args: [ipId],
@@ -124,6 +144,9 @@ export async function getTokenIdForIp(ipId: `0x${string}`): Promise<bigint> {
 }
 
 export async function getTokenURI(tokenId: string | bigint): Promise<string> {
+  if (!TRACK_NFT_ADDRESS) {
+    return "";
+  }
   return client.readContract({
     address: TRACK_NFT_ADDRESS,
     abi: NFT_ABI,

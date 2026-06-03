@@ -1,13 +1,28 @@
 import { createPublicClient, http, encodeFunctionData, decodeEventLog } from "viem";
-import type { WalletClient, Hash } from "viem";
+import type { WalletClient, Hash, Address } from "viem";
 import { aeneid } from "@story-protocol/core-sdk";
-import { env } from "./env";
-import { TRACK_RAILS_PROTOCOL } from "./story";
+import { env, isContractConfigured } from "./env";
 
 const publicClient = createPublicClient({
   chain: aeneid,
   transport: http(env.RPC_URL),
 });
+
+/**
+ * Get the TrackRailsProtocol address or throw a clear error.
+ * This guard prevents cryptic "cannot estimate gas" errors when the
+ * contract hasn't been deployed yet.
+ */
+function requireProtocolAddress(): Address {
+  if (!isContractConfigured("NEXT_PUBLIC_TRACK_RAILS_PROTOCOL")) {
+    throw new Error(
+      "[Contract] TrackRailsProtocol not configured. " +
+      "Deploy the contracts first via forge script, then set " +
+      "NEXT_PUBLIC_TRACK_RAILS_PROTOCOL in .env.local."
+    );
+  }
+  return process.env.NEXT_PUBLIC_TRACK_RAILS_PROTOCOL as Address;
+}
 
 const PROTOCOL_ABI = [
   {
@@ -72,10 +87,12 @@ export async function registerTrackOnProtocol(
   const account = walletClient.account?.address;
   if (!account) throw new Error("[Contract] Wallet not connected");
 
+  const protocolAddress = requireProtocolAddress();
+
   const hash: Hash = await walletClient.sendTransaction({
     account,
     chain: aeneid,
-    to: TRACK_RAILS_PROTOCOL,
+    to: protocolAddress,
     data: encodeFunctionData({
       abi: PROTOCOL_ABI,
       functionName: "registerTrack",
@@ -86,7 +103,7 @@ export async function registerTrackOnProtocol(
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
 
   const log = receipt.logs.find(
-    (l) => l.address.toLowerCase() === TRACK_RAILS_PROTOCOL.toLowerCase(),
+    (l) => l.address.toLowerCase() === protocolAddress.toLowerCase(),
   );
 
   if (!log) throw new Error("[Contract] registerTrack: no protocol event found");
@@ -123,10 +140,12 @@ export async function linkVaultOnProtocol(
   const account = walletClient.account?.address;
   if (!account) throw new Error("[Contract] Wallet not connected");
 
+  const protocolAddress = requireProtocolAddress();
+
   const hash: Hash = await walletClient.sendTransaction({
     account,
     chain: aeneid,
-    to: TRACK_RAILS_PROTOCOL,
+    to: protocolAddress,
     data: encodeFunctionData({
       abi: PROTOCOL_ABI,
       functionName: "linkVault",

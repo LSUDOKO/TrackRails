@@ -4,12 +4,14 @@ import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useAccount } from "wagmi";
 import { useStoryClient } from "@/hooks/use-story";
-import { getAllTracks, fetchTrackMetadata } from "@/lib/queries";
+import { fetchTrackMetadata } from "@/lib/queries";
 import type { TrackData, TrackMetadata } from "@/lib/queries";
+import { TrackCardSkeleton } from "@/components/ui/skeleton";
 import { mintLicenseToken } from "@/lib/story";
-import { createPublicClient, http } from "viem";
-import { aeneid } from "@story-protocol/core-sdk";
-import { CDR_CONTRACTS } from "@/lib/cdr";
+import { getUploadedTracks, mergeTracksWithLocal } from "@/lib/local-tracks";
+import { useTransactionToasts } from "@/components/TransactionToastProvider";
+import { saveLicenseTokenIds } from "@/lib/license-tokens";
+import { getTimedOutTransactionHash, getTransactionErrorMessage } from "@/lib/tx-error";
 
 const GRADIENTS = [
   "from-violet-500 to-purple-600",
@@ -20,41 +22,88 @@ const GRADIENTS = [
   "from-fuchsia-500 to-pink-600",
 ];
 
-const publicClient = createPublicClient({
-  chain: aeneid,
-  transport: http(process.env.NEXT_PUBLIC_RPC_URL ?? "https://aeneid.storyrpc.io"),
-});
-
 interface TrackEntry extends TrackData {
   meta?: TrackMetadata;
+  localOnly?: boolean;
 }
 
 type MintState = { tokenId: string; loading: boolean; done: boolean; error?: string };
 
+/**
+ * Fetch tracks from the server-side API route, bypassing client-side process.env issues.
+ */
+async function fetchTracksFromApi(): Promise<TrackEntry[]> {
+  const res = await fetch("/api/tracks?action=getAllTracks&offset=0&limit=50");
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `API error (${res.status})`);
+  }
+  const data = await res.json();
+  return (data.tracks ?? []).map((t: Record<string, unknown>) => ({
+    tokenId: BigInt((t as { tokenId: string }).tokenId),
+    ipId: t.ipId as `0x${string}`,
+    vaultUuid: t.vaultUuid as number,
+    owner: t.owner as `0x${string}`,
+    metadataURI: t.metadataURI as string,
+    licenseTermsId: BigInt(t.licenseTermsId as string),
+    timestamp: BigInt(t.timestamp as string),
+    vaultLinked: t.vaultLinked as boolean,
+  }));
+}
+
 export default function BrowsePage() {
   const { address, isConnected } = useAccount();
   const { client: storyClient } = useStoryClient();
+  const { addTransactionToast } = useTransactionToasts();
   const [tracks, setTracks] = useState<TrackEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [genre, setGenre] = useState("");
   const [minting, setMinting] = useState<Record<string, MintState>>({});
 
-  useEffect(() => {
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const loadTracks = useCallback(async () => {
     setLoading(true);
-    getAllTracks(0, 50)
+    setLoadError(null);
+    const localTracks = getUploadedTracks();
+    fetchTracksFromApi()
       .then(async (data) => {
+        const merged = mergeTracksWithLocal(data, localTracks);
         const withMeta = await Promise.all(
-          data.map(async (t) => {
-            const meta = await fetchTrackMetadata(t.metadataURI);
-            return { ...t, meta: meta ?? undefined };
+          merged.map(async (t) => {
+            try {
+              const meta = t.meta ?? await fetchTrackMetadata(t.metadataURI);
+              return { ...t, meta: meta ?? undefined };
+            } catch {
+              return { ...t, meta: undefined };
+            }
           }),
         );
         setTracks(withMeta);
       })
-      .catch(console.error)
+      .catch((err) => {
+        console.error("Failed to load tracks:", err);
+        if (localTracks.length > 0) {
+          setTracks(localTracks);
+          setLoadError(null);
+          return;
+        }
+        setLoadError(
+          err instanceof Error
+            ? err.message
+            : "Failed to load tracks. Make sure the contracts are deployed and your RPC is accessible."
+        );
+      })
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    void loadTracks();
+
+    window.addEventListener("trackrails:tracks-updated", loadTracks);
+    return () => window.removeEventListener("trackrails:tracks-updated", loadTracks);
+  }, [loadTracks]);
 
   const filtered = tracks.filter((t) => {
     const title = t.meta?.title ?? `Track #${t.tokenId.toString()}`;
@@ -75,24 +124,62 @@ export default function BrowsePage() {
         licenseTermsId: track.licenseTermsId,
         amount: 1,
       });
+      if (result.depositTxHash) {
+        addTransactionToast({ label: "WIP deposited", hash: result.depositTxHash });
+      }
+      if (result.approveTxHash) {
+        addTransactionToast({ label: "Royalty spend approved", hash: result.approveTxHash });
+      }
+      addTransactionToast({ label: "License minted", hash: result.txHash });
+      saveLicenseTokenIds({
+        owner: address,
+        ipId: track.ipId,
+        licenseTermsId: track.licenseTermsId,
+        tokenIds: result.licenseTokenIds,
+      });
       setMinting((prev) => ({
         ...prev,
         [key]: { tokenId: key, loading: false, done: true, error: undefined },
       }));
     } catch (err) {
+      const timedOutHash = getTimedOutTransactionHash(err);
+      if (timedOutHash) {
+        addTransactionToast({ label: "Transaction pending", hash: timedOutHash });
+      }
       setMinting((prev) => ({
         ...prev,
-        [key]: { tokenId: key, loading: false, done: false, error: err instanceof Error ? err.message : "Mint failed" },
+        [key]: { tokenId: key, loading: false, done: false, error: getTransactionErrorMessage(err) },
       }));
     }
-  }, [storyClient, address]);
+  }, [storyClient, address, addTransactionToast]);
 
   if (loading) {
     return (
       <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
-        <div className="glass-card rounded-2xl p-12 text-center">
-          <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-accent border-t-transparent" />
-          <p className="text-muted">Loading tracks from Story Protocol...</p>
+        <div className="mb-10">
+          <div className="h-9 w-48 animate-pulse rounded-lg bg-card/50" />
+          <div className="mt-2 h-5 w-72 animate-pulse rounded-lg bg-card/50" />
+        </div>
+        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <TrackCardSkeleton key={i} />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
+        <div className="glass-card rounded-2xl p-8 text-center">
+          <div className="mb-3 flex items-center justify-center gap-2 text-amber-400">
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+            </svg>
+            <span className="font-semibold text-sm">Catalog Unavailable</span>
+          </div>
+          <p className="text-sm text-muted">{loadError}</p>
         </div>
       </div>
     );
@@ -109,33 +196,68 @@ export default function BrowsePage() {
       </div>
 
       {tracks.length > 0 && (
-        <div className="mb-8 flex flex-col gap-3 sm:flex-row">
-          <div className="relative flex-1">
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full rounded-xl border border-border bg-card py-2.5 pl-4 pr-4 text-sm text-foreground placeholder:text-muted focus:border-accent focus:outline-none"
-              placeholder="Search tracks or artists..."
-            />
+        <div className="mb-8 space-y-3">
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <div className="relative flex-1">
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full rounded-xl border border-border bg-card py-2.5 pl-10 pr-4 text-sm text-foreground placeholder:text-muted focus:border-accent focus:outline-none"
+                placeholder="Search tracks or artists..."
+              />
+              <svg className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+              </svg>
+            </div>
+            <select
+              value={genre}
+              onChange={(e) => setGenre(e.target.value)}
+              className="rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground focus:border-accent focus:outline-none"
+            >
+              <option value="">All Genres</option>
+              {[...new Set(tracks.map((t) => t.meta?.genre).filter(Boolean))].map((g) => (
+                <option key={g} value={g}>{g}</option>
+              ))}
+            </select>
           </div>
-          <select
-            value={genre}
-            onChange={(e) => setGenre(e.target.value)}
-            className="rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground focus:border-accent focus:outline-none"
-          >
-            <option value="">All Genres</option>
-            {[...new Set(tracks.map((t) => t.meta?.genre).filter(Boolean))].map((g) => (
-              <option key={g} value={g}>{g}</option>
-            ))}
-          </select>
+          <div className="flex items-center justify-between text-xs text-muted">
+            <span>
+              Showing {filtered.length} of {tracks.length} track{tracks.length !== 1 ? "s" : ""}
+            </span>
+            {(search || genre) && (
+              <button
+                onClick={() => { setSearch(""); setGenre(""); }}
+                className="flex items-center gap-1 text-accent transition-colors hover:text-accent-hover"
+              >
+                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                Clear
+              </button>
+            )}
+          </div>
         </div>
       )}
 
       {filtered.length === 0 ? (
         <div className="glass-card rounded-2xl p-12 text-center">
           <p className="text-muted">
-            {tracks.length === 0 ? "No tracks registered yet." : "No tracks match your search."}
+            {tracks.length === 0
+              ? "No tracks registered yet."
+              : `No tracks match your search${search ? ` for "${search}"` : ""}${genre ? ` in "${genre}"` : ""}.`
+            }
           </p>
+          {(search || genre) && (
+            <button
+              onClick={() => { setSearch(""); setGenre(""); }}
+              className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-4 py-2 text-sm text-muted transition-colors hover:text-foreground"
+            >
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+              Clear Filters
+            </button>
+          )}
         </div>
       ) : (
         <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
@@ -178,7 +300,7 @@ export default function BrowsePage() {
                     <p className="text-sm text-muted">{artistName}</p>
                     <div className="mt-3 flex items-center justify-between text-xs text-muted">
                       <span>{genreLabel || "Audio"}</span>
-                      <span>Token #{track.tokenId.toString()}</span>
+                      <span>Token #{track.tokenId.toString()}{track.localOnly ? " · syncing" : ""}</span>
                     </div>
                   </Link>
 
@@ -208,7 +330,6 @@ export default function BrowsePage() {
                               <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
                             </svg>
                             Mint License
-                            {!track.meta?.genre ? "" : ""}
                           </>
                         )}
                       </button>

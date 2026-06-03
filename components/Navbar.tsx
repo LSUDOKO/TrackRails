@@ -3,34 +3,60 @@
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { cn } from "@/lib/utils";
+import { MenuToggleIcon } from "@/components/ui/menu-toggle-icon";
+import { useScroll } from "@/components/ui/use-scroll";
 
 const NAV_LINKS = [
   { href: "/", label: "Home" },
   { href: "/upload", label: "Upload" },
   { href: "/browse", label: "Browse" },
+  { href: "/cdr", label: "CDR" },
   { href: "/dashboard", label: "Dashboard" },
 ];
 
 export default function Navbar() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const scrolled = useScroll(20);
+
+  useEffect(() => {
+    if (mobileOpen) {
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "";
+    }
+    return () => { document.body.style.overflow = ""; };
+  }, [mobileOpen]);
 
   return (
-    <header className="sticky top-0 z-50 w-full border-b border-border/50 glass">
+    <header
+      className={cn(
+        "fixed top-0 z-50 w-full border-b transition-all duration-300 ease-out",
+        scrolled && !mobileOpen
+          ? "border-border/50 glass"
+          : "border-transparent bg-transparent",
+        mobileOpen && "glass border-border/50"
+      )}
+    >
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-        {/* Logo */}
         <Link
           href="/"
-          className="flex items-center gap-2.5 text-lg font-semibold tracking-tight transition-opacity hover:opacity-80"
+          className="flex items-center gap-2.5 transition-opacity hover:opacity-80"
         >
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/10 text-sm font-bold text-accent">
-            ♪
+          <img
+            src="/logo.png"
+            alt="Track Rails"
+            className="h-9 w-auto"
+            width={50}
+            height={50}
+          />
+          <span className="text-lg font-semibold tracking-tight text-foreground">
+            Track Rails
           </span>
-          <span className="text-foreground">Track Rails</span>
         </Link>
 
-        {/* Desktop nav */}
         <nav className="hidden items-center gap-1 md:flex">
           {NAV_LINKS.map((link) => {
             const isActive = pathname === link.href;
@@ -38,11 +64,12 @@ export default function Navbar() {
               <Link
                 key={link.href}
                 href={link.href}
-                className={`rounded-lg px-3.5 py-2 text-sm font-medium transition-colors ${
+                className={cn(
+                  "rounded-lg px-3.5 py-2 text-sm font-medium transition-colors",
                   isActive
                     ? "bg-accent/10 text-accent"
-                    : "text-muted hover:bg-card-hover hover:text-foreground"
-                }`}
+                    : "text-muted hover:bg-accent/5 hover:text-foreground"
+                )}
               >
                 {link.label}
               </Link>
@@ -50,7 +77,6 @@ export default function Navbar() {
           })}
         </nav>
 
-        {/* Right side */}
         <div className="flex items-center gap-3">
           <ConnectButton
             accountStatus={{
@@ -61,60 +87,45 @@ export default function Navbar() {
             chainStatus={{ smallScreen: "icon", largeScreen: "full" }}
           />
 
-          {/* Mobile hamburger */}
           <button
             onClick={() => setMobileOpen(!mobileOpen)}
-            className="flex h-9 w-9 items-center justify-center rounded-lg text-muted hover:bg-card-hover hover:text-foreground md:hidden"
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-muted hover:bg-accent/5 hover:text-foreground md:hidden"
             aria-label="Toggle menu"
           >
-            <svg
-              className="h-5 w-5"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={2}
-              aria-hidden="true"
-            >
-              {mobileOpen ? (
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M6 18L18 6M6 6l12 12"
-                />
-              ) : (
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M4 6h16M4 12h16M4 18h16"
-                />
-              )}
-            </svg>
+            <MenuToggleIcon open={mobileOpen} className="size-5" />
           </button>
         </div>
       </div>
 
-      {/* Mobile nav */}
-      {mobileOpen && (
-        <nav className="border-t border-border/50 px-4 pb-4 pt-2 md:hidden">
-          {NAV_LINKS.map((link) => {
-            const isActive = pathname === link.href;
-            return (
-              <Link
-                key={link.href}
-                href={link.href}
-                onClick={() => setMobileOpen(false)}
-                className={`block rounded-lg px-3.5 py-2.5 text-sm font-medium transition-colors ${
-                  isActive
-                    ? "bg-accent/10 text-accent"
-                    : "text-muted hover:bg-card-hover hover:text-foreground"
-                }`}
-              >
-                {link.label}
-              </Link>
-            );
-          })}
-        </nav>
-      )}
+      <div
+        className={cn(
+          "fixed top-16 left-0 right-0 bottom-0 z-50 flex flex-col overflow-hidden border-t border-border/50 md:hidden transition-all duration-300",
+          mobileOpen ? "opacity-100 visible" : "opacity-0 invisible pointer-events-none"
+        )}
+      >
+        <div className="flex h-full w-full flex-col justify-between bg-background/95 backdrop-blur-xl gap-y-2 p-6">
+          <div className="grid gap-y-1">
+            {NAV_LINKS.map((link) => {
+              const isActive = pathname === link.href;
+              return (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  onClick={() => setMobileOpen(false)}
+                  className={cn(
+                    "rounded-lg px-4 py-3 text-base font-medium transition-colors",
+                    isActive
+                      ? "bg-accent/10 text-accent"
+                      : "text-muted hover:bg-accent/5 hover:text-foreground"
+                  )}
+                >
+                  {link.label}
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      </div>
     </header>
   );
 }

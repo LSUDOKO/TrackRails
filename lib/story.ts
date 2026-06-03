@@ -55,6 +55,13 @@ export const REVENUE_TOKENS = {
   WIP: WIP_TOKEN_ADDRESS,
 } as const;
 
+const STORY_TX_OPTIONS = {
+  timeout: 600_000,
+  pollingInterval: 4_000,
+  retryCount: 12,
+  retryDelay: 2_000,
+} as const;
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -100,7 +107,6 @@ export interface MintLicenseTokenParams {
   licensorIpId: Address;
   licenseTermsId: bigint | number;
   amount?: number;
-  maxMintingFee?: bigint | number;
 }
 
 // ---------------------------------------------------------------------------
@@ -256,7 +262,7 @@ export async function registerTrack(
       {
         terms: {
           transferable: true,
-          defaultMintingFee: 0,
+          defaultMintingFee: 10000000000000000, // 0.01 WIP
           expiration: 0,
           commercialUse: true,
           commercialAttribution: true,
@@ -377,6 +383,9 @@ export async function attachLicenseTerms(
  * 2. Approve RoyaltyModule to spend WIP
  * 3. Mint the license token(s)
  *
+ * Note: The caller must have native IP tokens to wrap. If the deposit
+ * or approve steps fail, check that your wallet has sufficient IP balance.
+ *
  * @returns The minted license token IDs and transaction hashes.
  */
 export async function mintLicenseToken(
@@ -387,27 +396,41 @@ export async function mintLicenseToken(
     licensorIpId,
     licenseTermsId,
     amount = 1,
-    maxMintingFee = 0,
   } = params;
 
-  // 1. Wrap enough IP to cover fees
-  const wrapAmount = maxMintingFee ? parseEther("1") : parseEther("0.1");
+  if (!licensorIpId || licensorIpId === "0x0000000000000000000000000000000000000000" as Address) {
+    throw new Error("[Story] Invalid licensorIpId. Make sure the track has been registered as an IP Asset.");
+  }
+
+  if (!licenseTermsId || Number(licenseTermsId) === 0) {
+    throw new Error("[Story] Invalid licenseTermsId. Make sure license terms are attached to the IP Asset.");
+  }
+
+  // 1. Wrap enough IP to cover fees (0.05 WIP is enough for 0.01 fee per license)
+  const wrapAmount = parseEther("0.05");
+  console.info("[Story] Wrapping IP → WIP...");
   const depositResult = await client.wipClient.deposit({
     amount: wrapAmount,
+    txOptions: STORY_TX_OPTIONS,
   });
 
   // 2. Approve RoyaltyModule to spend WIP
+  console.info("[Story] Approving RoyaltyModule...");
   const approveResult = await client.wipClient.approve({
     spender: STORY_CONTRACTS.ROYALTY_MODULE,
     amount: wrapAmount,
+    txOptions: STORY_TX_OPTIONS,
   });
 
-  // 3. Mint license token(s)
+  // 3. Mint license token(s) — fee comes from the approved WIP
+  const feePerLic = parseEther("0.01");
+  console.info("[Story] Minting license token(s)...");
   const mintResult = await client.license.mintLicenseTokens({
     licensorIpId,
     licenseTermsId,
     amount,
-    maxMintingFee,
+    maxMintingFee: feePerLic * BigInt(amount),
+    txOptions: STORY_TX_OPTIONS,
   });
 
   return {
@@ -431,25 +454,51 @@ export async function claimRevenue(
   client: StoryClient,
   params: {
     ancestorIpId: Address;
+    claimer?: Address;
     childIpIds: Address[];
+    royaltyPolicies?: Address[];
     currencyTokens?: Address[];
   },
 ) {
-  const { ancestorIpId, childIpIds, currencyTokens } = params;
+  const {
+    ancestorIpId,
+    childIpIds,
+    currencyTokens = [REVENUE_TOKENS.WIP],
+  } = params;
+  const claimer = params.claimer ?? ancestorIpId;
+  const royaltyPolicies =
+    params.royaltyPolicies ??
+    childIpIds.map(() => STORY_CONTRACTS.ROYALTY_POLICY_LAP);
+
+  if (currencyTokens.length === 0) {
+    throw new Error("Select at least one revenue token to claim.");
+  }
+
+  const claimTokens =
+    childIpIds.length > 0 && currencyTokens.length !== childIpIds.length
+      ? childIpIds.map((_, index) => currencyTokens[index] ?? currencyTokens[0])
+      : currencyTokens;
 
   const response = await client.royalty.claimAllRevenue({
     ancestorIpId,
-    claimer: params.ancestorIpId,
+    claimer,
     childIpIds,
-    royaltyPolicies: childIpIds.map(
-      () => STORY_CONTRACTS.ROYALTY_POLICY_LAP,
-    ),
-    currencyTokens: currencyTokens ?? [REVENUE_TOKENS.MERC20],
+    royaltyPolicies,
+    currencyTokens: claimTokens,
+    claimOptions: {
+      autoTransferAllClaimedTokensFromIp: true,
+      autoUnwrapIpTokens: true,
+    },
   });
+  const claimedTokens = response.claimedTokens ?? [];
 
   return {
-    amountsClaimed: (response as { amountsClaimed?: bigint[] }).amountsClaimed ??
-      [],
-    txHash: (response as { txHash?: Hash }).txHash,
+    claimedTokens,
+    totalClaimed: claimedTokens.reduce(
+      (total, token) => total + token.amount,
+      BigInt(0),
+    ),
+    txHash: response.txHashes?.[0] as Hash | undefined,
+    txHashes: response.txHashes ?? [],
   };
 }

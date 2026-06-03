@@ -5,6 +5,7 @@ import { Script } from "forge-std/Script.sol";
 import { console } from "forge-std/console.sol";
 import { TrackRailsNFT } from "../src/TrackRailsNFT.sol";
 import { TrackRailsProtocol } from "../src/TrackRailsProtocol.sol";
+import { TrackRailsPlaylist } from "../src/TrackRailsPlaylist.sol";
 import { TrackRailsReadCondition } from "../src/conditions/TrackRailsReadCondition.sol";
 import { TrackRailsWriteCondition } from "../src/conditions/TrackRailsWriteCondition.sol";
 
@@ -30,6 +31,7 @@ contract DeployTrackRails is Script {
     address constant RPL = 0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E;
     address constant WIP = 0x1514000000000000000000000000000000000000;
     address constant LRC = 0xC0640AD4CF2CaA9914C8e5C44234359a9102f7a3;
+
     function run() external {
         uint256 pk = vm.envUint("PRIVATE_KEY");
         address dep = vm.addr(pk);
@@ -52,6 +54,21 @@ contract DeployTrackRails is Script {
         nft.transferOwnership(address(proto));
         console.log("NFT ownership transferred to protocol");
 
+        TrackRailsPlaylist playlist = new TrackRailsPlaylist(dep);
+        console.log("TrackRailsPlaylist:", address(playlist));
+
         vm.stopBroadcast();
+
+        // Write addresses to JSON for frontend consumption
+        string memory json = string.concat(
+            '{"TrackRailsProtocol":"', vm.toString(address(proto)),
+            '","TrackRailsNFT":"', vm.toString(address(nft)),
+            '","TrackRailsReadCondition":"', vm.toString(address(rc)),
+            '","TrackRailsWriteCondition":"', vm.toString(address(wc)),
+            '","TrackRailsPlaylist":"', vm.toString(address(playlist)),
+            '"}'
+        );
+        vm.writeJson(json, "./deploy-out/addresses.json");
+        console.log("Addresses written to deploy-out/addresses.json");
     }
 }

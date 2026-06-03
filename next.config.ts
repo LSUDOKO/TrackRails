@@ -1,10 +1,11 @@
-import path from "path";
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   serverExternalPackages: ["@piplabs/cdr-sdk"],
-  turbopack: {
-    root: path.resolve(__dirname),
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "10mb",
+    },
   },
 };
 

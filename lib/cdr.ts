@@ -409,6 +409,10 @@ export interface CDRAccessResult {
  * ```
  * encodeAbiParameters([{ type: "uint256[]" }], [[BigInt(tokenId)]])
  * ```
+ *
+ * Includes automatic retry logic for timeout scenarios. The CDR read flow
+ * can fail if not enough validators respond in time. This wrapper retries
+ * once with a longer timeout before giving up.
  */
 export async function accessCDR(
   client: CDRClient,
@@ -416,11 +420,31 @@ export async function accessCDR(
 ): Promise<CDRAccessResult> {
   const { uuid, accessAuxData = "0x", timeoutMs = 120_000 } = params;
 
-  return client.consumer.accessCDR({
-    uuid,
-    accessAuxData,
-    timeoutMs,
-  });
+  try {
+    return await client.consumer.accessCDR({
+      uuid,
+      accessAuxData,
+      timeoutMs,
+    });
+  } catch (err) {
+    // Retry once with a longer timeout on timeout errors
+    const isTimeout =
+      err instanceof Error &&
+      (err.message.includes("timeout") ||
+        err.message.includes("TIMEOUT") ||
+        err.message.includes("PartialCollectionTimeout"));
+
+    if (isTimeout) {
+      console.warn(`[CDR] accessCDR timed out after ${timeoutMs}ms. Retrying with ${timeoutMs * 2}ms…`);
+      return await client.consumer.accessCDR({
+        uuid,
+        accessAuxData,
+        timeoutMs: timeoutMs * 2,
+      });
+    }
+
+    throw err;
+  }
 }
 
 /**
@@ -436,6 +460,8 @@ export interface DownloadFileResult {
  * Download an encrypted file from IPFS (via storage provider) and decrypt
  * it using the key from the CDR vault.
  *
+ * Includes automatic retry logic for timeout scenarios.
+ *
  * @returns The decrypted file content, IPFS CID, and read tx hash.
  */
 export async function downloadCDRFile(
@@ -449,12 +475,32 @@ export async function downloadCDRFile(
     timeoutMs = 120_000,
   } = params;
 
-  return client.consumer.downloadFile({
-    uuid,
-    storageProvider,
-    accessAuxData,
-    timeoutMs,
-  });
+  try {
+    return await client.consumer.downloadFile({
+      uuid,
+      storageProvider,
+      accessAuxData,
+      timeoutMs,
+    });
+  } catch (err) {
+    const isTimeout =
+      err instanceof Error &&
+      (err.message.includes("timeout") ||
+        err.message.includes("TIMEOUT") ||
+        err.message.includes("PartialCollectionTimeout"));
+
+    if (isTimeout) {
+      console.warn(`[CDR] downloadFile timed out after ${timeoutMs}ms. Retrying with ${timeoutMs * 2}ms…`);
+      return await client.consumer.downloadFile({
+        uuid,
+        storageProvider,
+        accessAuxData,
+        timeoutMs: timeoutMs * 2,
+      });
+    }
+
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------

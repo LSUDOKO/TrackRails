@@ -1,19 +1,22 @@
 {
   "transactions": [
     {
-      "rpc": "https://aeneid.storyrpc.io"
+      "rpc": "https://rpc.ankr.com/story_aeneid_testnet"
     },
     {
-      "rpc": "https://aeneid.storyrpc.io"
+      "rpc": "https://rpc.ankr.com/story_aeneid_testnet"
     },
     {
-      "rpc": "https://aeneid.storyrpc.io"
+      "rpc": "https://rpc.ankr.com/story_aeneid_testnet"
     },
     {
-      "rpc": "https://aeneid.storyrpc.io"
+      "rpc": "https://rpc.ankr.com/story_aeneid_testnet"
     },
     {
-      "rpc": "https://aeneid.storyrpc.io"
+      "rpc": "https://rpc.ankr.com/story_aeneid_testnet"
+    },
+    {
+      "rpc": "https://rpc.ankr.com/story_aeneid_testnet"
     }
   ]
 }
