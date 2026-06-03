@@ -114,15 +114,25 @@ export default function UploadPage() {
     maxSize: 5 * 1024 * 1024,
   });
 
-  async function uploadToIPFS(data: Uint8Array, name?: string): Promise<string> {
-    const blob = new Blob([data.buffer as ArrayBuffer]);
-    const res = await fetch(`/api/ipfs/upload${name ? `?name=${name}` : ""}`, { method: "POST", body: blob });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || "IPFS upload failed");
+  async function uploadToIPFS(data: Uint8Array): Promise<string> {
+    const blob = new Blob([data.buffer as ArrayBuffer], { type: "audio/mpeg" });
+    const pinataJwt = process.env.NEXT_PUBLIC_PINATA_JWT;
+    if (!pinataJwt) {
+      throw new Error("Pinata JWT not set — add NEXT_PUBLIC_PINATA_JWT to your env");
     }
-    const { cid } = await res.json();
-    return cid as string;
+    const formData = new FormData();
+    formData.append("file", blob, `track-${Date.now()}.mp3`);
+    const res = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${pinataJwt}` },
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.text().catch(() => "unknown");
+      throw new Error(`IPFS upload failed: ${err.slice(0, 200)}`);
+    }
+    const data_ = await res.json();
+    return data_.IpfsHash as string;
   }
 
   async function handleSubmit(e?: React.FormEvent) {
