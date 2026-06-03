@@ -136,6 +136,18 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ count: count.toString() });
     }
 
+    if (action === "getTrackIds") {
+      const offset = BigInt(url.searchParams.get("offset") ?? "0");
+      const limit = BigInt(url.searchParams.get("limit") ?? "100");
+      const ids: readonly bigint[] = await client.readContract({
+        address: protocol,
+        abi: PROTOCOL_ABI,
+        functionName: "getTrackIds",
+        args: [offset, limit],
+      });
+      return NextResponse.json({ trackIds: ids.map(String) });
+    }
+
     if (action === "getTracksByOwner") {
       const owner = url.searchParams.get("owner") as `0x${string}` | null;
       if (!owner) return NextResponse.json({ error: "Missing owner" }, { status: 400 });

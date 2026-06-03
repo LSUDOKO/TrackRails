@@ -116,9 +116,19 @@ export default function UploadPage() {
 
   async function uploadToIPFS(data: Uint8Array): Promise<string> {
     const blob = new Blob([data.buffer as ArrayBuffer], { type: "audio/mpeg" });
+    const filename = `track-${Date.now()}.mp3`;
 
-    // Strategy 1: direct browser upload to Pinata (works for any size, but may
-    // hit CORS / HTTP/2 issues on some networks).
+    // Strategy 1: proxy through our server (reliable, no CORS / HTTP2 issues).
+    // Works for files under ~4.5 MB on Vercel Hobby.
+    const fd = new FormData();
+    fd.append("file", blob, filename);
+    const proxyRes = await fetch("/api/ipfs/upload", { method: "POST", body: fd });
+    if (proxyRes.ok) {
+      const d = await proxyRes.json();
+      return (d as { cid: string }).cid;
+    }
+
+    // 413 = file too large for server proxy → try direct Pinata upload.
     let pinataJwt: string | undefined = process.env.NEXT_PUBLIC_PINATA_JWT;
     if (!pinataJwt) {
       try {
@@ -131,14 +141,14 @@ export default function UploadPage() {
     }
 
     if (pinataJwt) {
-      const formData = new FormData();
-      formData.append("file", blob, `track-${Date.now()}.mp3`);
+      const fd2 = new FormData();
+      fd2.append("file", blob, filename);
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
           const res = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
             method: "POST",
             headers: { Authorization: `Bearer ${pinataJwt}` },
-            body: formData,
+            body: fd2,
           });
           if (!res.ok) {
             const err = await res.text().catch(() => "unknown");
@@ -153,19 +163,12 @@ export default function UploadPage() {
       }
     }
 
-    // Strategy 2: proxy through our server (works for files < 4.5 MB).
-    const formData2 = new FormData();
-    formData2.append("file", blob, `track-${Date.now()}.mp3`);
-    const proxyRes = await fetch("/api/ipfs/upload", {
-      method: "POST",
-      body: formData2,
-    });
-    if (!proxyRes.ok) {
-      const err = await proxyRes.json().catch(() => ({}));
-      throw new Error((err as { error?: string }).error ?? `Upload failed (${proxyRes.status})`);
-    }
-    const proxyData = await proxyRes.json();
-    return (proxyData as { cid: string }).cid;
+    const errBody = await proxyRes.json().catch(() => ({}));
+    throw new Error(
+      (errBody as { error?: string }).error
+        ? `Server upload failed: ${(errBody as { error?: string }).error}`
+        : `Upload failed (${proxyRes.status}). Try a smaller file (under 4.5 MB) or set NEXT_PUBLIC_PINATA_JWT for direct upload.`,
+    );
   }
 
   async function handleSubmit(e?: React.FormEvent) {

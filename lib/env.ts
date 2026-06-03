@@ -75,7 +75,7 @@ export const env = {
   },
   get STORY_API_URL() {
     return (
-      process.env.NEXT_PUBLIC_STORY_API_URL ?? "https://aeneid.storyrpc.io"
+      process.env.NEXT_PUBLIC_STORY_API_URL ?? "/api/story-proxy"
     );
   },
   get WALLET_CONNECT_PROJECT_ID() {
