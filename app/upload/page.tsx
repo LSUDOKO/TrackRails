@@ -116,9 +116,12 @@ export default function UploadPage() {
 
   async function uploadToIPFS(data: Uint8Array): Promise<string> {
     const blob = new Blob([data.buffer as ArrayBuffer], { type: "audio/mpeg" });
-    const pinataJwt = process.env.NEXT_PUBLIC_PINATA_JWT;
+    let pinataJwt = process.env.NEXT_PUBLIC_PINATA_JWT;
     if (!pinataJwt) {
-      throw new Error("Pinata JWT not set — add NEXT_PUBLIC_PINATA_JWT to your env");
+      const r = await fetch("/api/ipfs/jwt");
+      if (!r.ok) throw new Error("Pinata JWT not available");
+      const j = await r.json();
+      pinataJwt = j.jwt;
     }
     const formData = new FormData();
     formData.append("file", blob, `track-${Date.now()}.mp3`);
