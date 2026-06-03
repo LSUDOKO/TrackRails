@@ -114,10 +114,13 @@ export default function UploadPage() {
     maxSize: 5 * 1024 * 1024,
   });
 
-  async function uploadToIPFS(data: Uint8Array): Promise<string> {
+  async function uploadToIPFS(data: Uint8Array, name?: string): Promise<string> {
     const blob = new Blob([data.buffer as ArrayBuffer]);
-    const res = await fetch("/api/ipfs/upload", { method: "POST", body: blob });
-    if (!res.ok) throw new Error("IPFS upload failed");
+    const res = await fetch(`/api/ipfs/upload${name ? `?name=${name}` : ""}`, { method: "POST", body: blob });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || "IPFS upload failed");
+    }
     const { cid } = await res.json();
     return cid as string;
   }

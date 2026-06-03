@@ -11,13 +11,14 @@ export async function POST(req: NextRequest) {
     if (!pinataJwt) {
       console.error("[IPFS] PINATA_JWT is not set in environment");
       return NextResponse.json(
-        { error: "IPFS upload not configured — set PINATA_JWT in .env.local" },
+        { error: "IPFS upload not configured — set PINATA_JWT in Vercel env vars" },
         { status: 500 },
       );
     }
 
+    const filename = `track-${Date.now()}.mp3`;
     const formData = new FormData();
-    formData.append("file", blob);
+    formData.append("file", blob, filename);
 
     const res = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
       method: "POST",
@@ -30,7 +31,7 @@ export async function POST(req: NextRequest) {
     if (!res.ok) {
       const err = await res.text();
       console.error("[IPFS] Pinata error (", res.status, "):", err);
-      return NextResponse.json({ error: "IPFS upload failed at Pinata" }, { status: 502 });
+      return NextResponse.json({ error: `IPFS upload failed: ${err.slice(0, 200)}` }, { status: 502 });
     }
 
     const data = await res.json();
