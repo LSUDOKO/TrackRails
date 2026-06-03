@@ -73,11 +73,24 @@ export default function DashboardPage() {
     async function fetchTracksByOwner(owner: `0x${string}`): Promise<TrackEntry[]> {
       const res = await fetch(`/api/tracks?action=getTracksByOwner&owner=${owner}`);
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `API error (${res.status})`);
+        let body: Record<string, unknown> = {};
+        try {
+          body = await res.json();
+        } catch {
+          const text = await res.text().catch(() => "");
+          console.error("[Dashboard] API non-OK response body:", text.slice(0, 300));
+        }
+        throw new Error((body.error as string) || `API error (${res.status})`);
       }
-      const data = await res.json();
-      return (data.tracks ?? []).map((t: Record<string, unknown>) => ({
+      let data: Record<string, unknown>;
+      try {
+        data = await res.json();
+      } catch (e) {
+        const text = await res.text().catch(() => "");
+        console.error("[Dashboard] API returned invalid JSON:", text.slice(0, 500));
+        throw new Error(`Server returned invalid response. Please try again later.`);
+      }
+      return ((data.tracks ?? []) as Record<string, unknown>[]).map((t: Record<string, unknown>) => ({
         tokenId: BigInt((t as { tokenId: string }).tokenId),
         ipId: t.ipId as `0x${string}`,
         vaultUuid: t.vaultUuid as number,
