@@ -127,6 +127,9 @@ export function createCDRClient(opts: CDRClientOptions = {}) {
     publicClient,
     walletClient: opts.walletClient,
     apiUrl: "/api/story-proxy",
+    // Require at least 60% of validators to respond to avoid
+    // PartialCollectionTimeoutError on the Aeneid testnet.
+    minThresholdRatio: 0.6,
   });
 }
 
