@@ -126,7 +126,7 @@ export function createCDRClient(opts: CDRClientOptions = {}) {
     network: "testnet",
     publicClient,
     walletClient: opts.walletClient,
-    apiUrl: env.STORY_API_URL,
+    apiUrl: "/api/story-proxy",
   });
 }
 
