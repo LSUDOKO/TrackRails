@@ -2,22 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 
 /**
  * Story Protocol REST API target.
- *
- * Priority:
- * 1. STORY_API_TARGET from env (user's own node / custom proxy)
- * 2. Story Protocol staging API (with API key from STORY_API_KEY)
- * 3. Public Aeneid REST endpoint (no key required for basic DKG reads)
+ * ONLY reads STORY_API_TARGET from env. Delete that var from Vercel
+ * if you want to use a different one — don't rely on fallback chains
+ * that can pick up stale ngrok URLs.
  */
-const TARGET =
-  process.env.STORY_API_TARGET ??
-  process.env.NEXT_PUBLIC_STORY_API_URL ??
-  "https://aeneid-rest.storyrpc.io";
+const TARGET = process.env.STORY_API_TARGET ?? "";
 const API_KEY = process.env.STORY_API_KEY ?? "";
 
 export async function GET(req: NextRequest) {
   if (!TARGET) {
     return NextResponse.json(
-      { error: "Story API target not configured. Set STORY_API_TARGET in Vercel env vars." },
+      {
+        error:
+          "Story API target not configured. Set STORY_API_TARGET in Vercel env vars. " +
+          "Example: STORY_API_TARGET=https://staging-api.storyprotocol.net/api/v4",
+      },
       { status: 503 },
     );
   }
