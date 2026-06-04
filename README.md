@@ -529,6 +529,14 @@ The SDK throws typed errors that Track Rails catches and handles gracefully:
 
 ## 🤖 Telegram Bot
 
+## Gallery 
+<img width="720" height="1366" alt="image" src="https://github.com/user-attachments/assets/df701234-2bed-4d21-9c06-30a7f194469a" />
+
+<img width="707" height="1420" alt="image" src="https://github.com/user-attachments/assets/154c781d-df53-4cf5-8f8f-78d4a11de304" />
+
+<img width="696" height="1408" alt="image" src="https://github.com/user-attachments/assets/6dde15a2-56b8-48d9-830e-984e38b8bf31" />
+
+
 Track Rails includes a **Telegram bot** (`@TrackRailsBot`) built with the [grammy](https://grammy.dev/) framework that reads directly from the blockchain — no database, no API, just live on-chain queries.
 
 ### Commands
