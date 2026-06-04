@@ -81,6 +81,9 @@ Track Rails uses **Confidential Data Rails (CDR)** by Story Protocol for three r
 
 ## How It Works
 
+<img width="1536" height="1024" alt="ChatGPT Image Jun 4, 2026, 10_55_31 AM" src="https://github.com/user-attachments/assets/ff668cc8-52e6-4e3a-ab20-93941bbc244a" />
+
+
 ### Upload Flow (Artist)
 
 ```
