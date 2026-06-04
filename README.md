@@ -1,9 +1,9 @@
-<img width="1500" height="500" alt="Music Studio" src="https://github.com/user-attachments/assets/8f582149-8566-4b54-ba90-af4a867d2893" />
+<img width="1500" height="500" alt="Music Studio(1)" src="https://github.com/user-attachments/assets/1148d095-1842-47de-9f2f-b250c7ce31c8" />
 
 <div align="center">
-
+   
 # Track Rails
-
+   
 ### Decentralized Audio on Story Protocol — AES-256 Encrypted, License-Gated, On-Chain Royalties
 
 [![Next.js](https://img.shields.io/badge/Next.js_16-000000?logo=next.js&logoColor=white)](https://nextjs.org/)
