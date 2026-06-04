@@ -1,6 +1,8 @@
+<img width="1500" height="500" alt="Music Studio" src="https://github.com/user-attachments/assets/8f582149-8566-4b54-ba90-af4a867d2893" />
+
 <div align="center">
 
-# 🚂 Track Rails
+# Track Rails
 
 ### Decentralized Audio on Story Protocol — AES-256 Encrypted, License-Gated, On-Chain Royalties
 
