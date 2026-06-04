@@ -81,7 +81,7 @@ Track Rails uses **Confidential Data Rails (CDR)** by Story Protocol for three r
 
 ## How It Works
 
-<img width="1536" height="1024" alt="ChatGPT Image Jun 4, 2026, 10_55_31 AM" src="https://github.com/user-attachments/assets/ff668cc8-52e6-4e3a-ab20-93941bbc244a" />
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/b7a4ee87-3b4d-4cf9-8cad-a419a959b84e" />
 
 
 ### Upload Flow (Artist)
@@ -379,6 +379,8 @@ Condition Contracts
 ---
 
 ## 🔐 CDR Integration — Deep Dive
+
+<img width="1408" height="768" alt="image" src="https://github.com/user-attachments/assets/2dd60b45-e52a-427a-82b9-cabff090e6e7" />
 
 ### What Makes CDR Different
 
