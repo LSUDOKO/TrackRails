@@ -17,6 +17,7 @@ const _NEXT_PUBLIC: Record<string, string | undefined> = {
   NEXT_PUBLIC_TRACK_NFT: process.env.NEXT_PUBLIC_TRACK_NFT,
   NEXT_PUBLIC_PLAYLIST_CONTRACT:
     process.env.NEXT_PUBLIC_PLAYLIST_CONTRACT,
+  NEXT_PUBLIC_PINATA_JWT: process.env.NEXT_PUBLIC_PINATA_JWT,
 };
 
 // Regular (non-public) env vars — not inlined, but only accessed from
@@ -25,7 +26,7 @@ const _ENV: Record<string, string | undefined> = {
   PINATA_JWT: process.env.PINATA_JWT,
 };
 
-function readEnv(key: string, fallback = ""): string {
+export function readEnv(key: string, fallback = ""): string {
   return _NEXT_PUBLIC[key] ?? _ENV[key] ?? process.env[key] ?? fallback;
 }
 

@@ -6,7 +6,7 @@ import { useWalletClient, useAccount } from "wagmi";
 import { encryptFile } from "@piplabs/cdr-sdk";
 import { createCDRVault } from "@/lib/cdr";
 import { registerTrackOnProtocol, linkVaultOnProtocol } from "@/lib/contract";
-import { isContractConfigured } from "@/lib/env";
+import { isContractConfigured, readEnv } from "@/lib/env";
 import { saveUploadedTrack } from "@/lib/local-tracks";
 import { useTransactionToasts } from "@/components/TransactionToastProvider";
 import { useDropzone } from "react-dropzone";
@@ -65,7 +65,7 @@ async function uploadToIPFS(data: Uint8Array): Promise<string> {
   const sizeMB = (blob.size / 1024 / 1024).toFixed(1);
 
   // ── Strategy 1: Direct Pinata upload ───────────────────────────────
-  let pinataJwt: string | undefined = process.env.NEXT_PUBLIC_PINATA_JWT;
+  let pinataJwt: string | undefined = readEnv("NEXT_PUBLIC_PINATA_JWT");
   if (!pinataJwt) {
     try {
       const r = await fetch("/api/ipfs/jwt");
